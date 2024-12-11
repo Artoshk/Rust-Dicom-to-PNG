@@ -1,0 +1,8 @@
+[package]
+name = "dcm_2_png"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dicom = "0.8"
+dicom-pixeldata = { version = "0.8", features = ["gdcm", "image"] }
