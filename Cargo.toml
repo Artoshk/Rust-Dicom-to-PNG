@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 dicom = "0.8"
 dicom-pixeldata = { version = "0.8", features = ["gdcm", "image"] }
+rayon = "1.10"
+sha2 = "0.10.8"

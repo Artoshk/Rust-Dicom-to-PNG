@@ -1,6 +1,6 @@
 # DICOM Thumbnail Generator
 
-A Rust application that recursively processes DICOM files and generates thumbnail images in JPG format.
+A Rust application that recursively processes DICOM files and generates thumbnail images in PNG format.
 
 ## Features
 
@@ -41,13 +41,13 @@ cargo run --release
 The program will:
 - Scan the specified directory recursively for `.dcm` files
 - Create a `thumbnails` directory in the current working directory
-- Generate JPG thumbnails for each DICOM file
+- Generate PNG thumbnails for each DICOM file
 - Display progress and timing information for each processed file
 
 ## Output
 
 - Thumbnails are saved in the `thumbnails` directory
-- Each thumbnail is named after its source DICOM file with a `.jpg` extension
+- Each thumbnail is named after its source DICOM file with a `.png` extension
 - Final summary shows the number of successfully processed files
 
 ## Error Handling
@@ -66,6 +66,26 @@ Errors are logged to the console, but processing continues for remaining files.
 - `dicom-pixeldata` (0.8): Pixel data decoding with GDCM support
 - Standard Rust libraries for file system operations and timing
 - CMAKE
+
+## Check memory usage
+
+- Linux:
+  - Track Memory Using `Heaptrack`
+```bash
+sudo apt install heaptrack
+heaptrack ./target/release/dcm_2_png
+```
+Then inspect the output using the `heaptrack` command.
+```bash
+heaptrack --analyze "./heaptrack.dcm_2_png.{pid}.gz"
+```
+
+- macOS:
+  - Instruments App (part of Xcode) can profile memory.
+Use leaks or vmmap for simpler checks.
+
+- Windows:
+  - Use tools like Visual Studio Profiler or Windows Performance Toolkit.
 
 ## License
 MIT

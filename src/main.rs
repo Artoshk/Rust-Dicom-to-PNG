@@ -5,74 +5,91 @@ use dicom::object::open_file;
 use dicom_pixeldata::{image, BitDepthOption, ConvertOptions, PixelDecoder};
 use std::time::Instant;
 use std::fs;
+use std::path::Path;
+use std::error::Error;
+use rayon::prelude::*;
+use sha2::{Sha256, Digest};
 
-fn get_all_dicom_files_recursively(path: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+fn get_all_dicom_files_recursively(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let mut files = Vec::new();
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            files.extend(get_all_dicom_files_recursively(&path.to_string_lossy())?);
-        } else if path.is_file() && path.to_string_lossy().ends_with(".dcm") {
+            files.extend(get_all_dicom_files_recursively(&path)?);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("dcm") {
             files.push(path.to_string_lossy().to_string());
         }
     }
     Ok(files)
 }
 
-fn generate_dicom_thumbnail(path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let file_name = path.split('/').last().unwrap()
-        .replace(".dcm", ".png");
-    let output_path = format!("thumbnails/{}", file_name);
-    
+fn generate_dicom_thumbnail(path: &str) -> Result<(), Box<dyn Error>> {
+    // Compute the hash from the file path
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+
+    // Extract the original file name
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+
+    // Combine hash and file name, replacing the extension with .png
+    let new_file_name = format!("{}_{}", hash, file_name.replace(".dcm", ".png"));
+
+    // Construct the output path
+    let output_path = Path::new("thumbnails").join(new_file_name);
+
     let obj = open_file(path)?;
     let image = match obj.decode_pixel_data() {
         Ok(img) => img,
         Err(e) => {
             println!("Error decoding pixel data for {}: {}", path, e);
-            return Ok(());  // Skip this file but continue processing others
+            return Err(Box::new(e)); // Skip this file but continue processing others
         }
     };
 
     let options = ConvertOptions::new().with_bit_depth(BitDepthOption::Auto);
-    
-    let dynamic_image = match image.to_dynamic_image_with_options(0, &options) {
-        Ok(img) => img,
-        Err(e) => {
-            println!("Error converting image for {}: {}", path, e);
-            return Ok(());  // Skip this file but continue processing others
+
+    {
+        let dynamic_image = match image.to_dynamic_image_with_options(0, &options) {
+            Ok(img) => img,
+            Err(e) => {
+                println!("Error converting image for {}: {}", path, e);
+                return Err(Box::new(e)); // Skip this file but continue processing others
+            }
+        };
+
+        let thumbnail = dynamic_image.resize(150, 150, image::imageops::FilterType::Lanczos3);
+
+        fs::create_dir_all("thumbnails")?;
+        if let Err(e) = thumbnail.save(&output_path) {
+            println!("Error saving thumbnail for {}: {}", path, e);
+            return Err(Box::new(e)); // Skip this file but continue processing others
         }
-    };
-    
-    let thumbnail = dynamic_image.resize(150, 150, image::imageops::FilterType::Lanczos3);
-    
-    fs::create_dir_all("thumbnails")?;
-    
-    if let Err(e) = thumbnail.save(&output_path) {
-        println!("Error saving thumbnail for {}: {}", path, e);
-        return Ok(());  // Skip this file but continue processing others
-    }
-    
+    } // Ensure `dynamic_image` and `thumbnail` are dropped here
+
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Your folder that contains the dicom files
+fn main() -> Result<(), Box<dyn Error>> {
     const DICOM_DIR: &str = "/mnt/d/FilterDicom";
-    let files = get_all_dicom_files_recursively(DICOM_DIR)?;
-    let mut success_count = 0;
+    let files = get_all_dicom_files_recursively(Path::new(DICOM_DIR))?;
     let total_files = files.len();
-    
-    for file in files {
-        println!("Processing file: {}", file);
+
+    let success_count = files.par_iter().map(|file| {
         let start_time = Instant::now();
-        if generate_dicom_thumbnail(&file).is_ok() {
-            success_count += 1;
-        }
+
+        let result = generate_dicom_thumbnail(file).is_ok();
+
         let elapsed_time = start_time.elapsed();
-        println!("Processing time: {:.2?}", elapsed_time);
-    }
-    
+        println!("File {}: Took: {:.2?}", file, elapsed_time);
+
+        result
+    }).filter(|&result| result).count();
+
     println!("Successfully processed {}/{} files", success_count, total_files);
     Ok(())
 }
