@@ -62,9 +62,7 @@ Errors are logged to the console, but processing continues for remaining files.
 
 ## Dependencies
 
-- `dicom` (0.8): DICOM file parsing
-- `dicom-pixeldata` (0.8): Pixel data decoding with GDCM support
-- Standard Rust libraries for file system operations and timing
+- Rust / Cargo
 - CMAKE
 
 ## Check memory usage
