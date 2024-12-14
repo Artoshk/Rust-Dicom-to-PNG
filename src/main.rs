@@ -75,6 +75,7 @@ fn generate_dicom_thumbnail(path: &str) -> Result<(), Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Change this to the path to your DICOM files
     const DICOM_DIR: &str = "/mnt/d/FilterDicom";
     let files = get_all_dicom_files_recursively(Path::new(DICOM_DIR))?;
     let total_files = files.len();
