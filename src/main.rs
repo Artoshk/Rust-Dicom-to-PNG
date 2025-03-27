@@ -1,96 +1,89 @@
 // Copyright (c) Anderson Karl <andersonlkarl@gmail.com>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
-use dicom::object::open_file;
-use dicom_pixeldata::{image, BitDepthOption, ConvertOptions, PixelDecoder};
+use dicom::object;
+use dicom_pixeldata::{BitDepthOption, ConvertOptions, PixelDecoder};
 use std::time::Instant;
 use std::fs;
-use std::path::Path;
 use std::error::Error;
-use rayon::prelude::*;
-use sha2::{Sha256, Digest};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::io::{Cursor, Read};
+use image::{DynamicImage, ImageFormat, imageops::FilterType, ImageBuffer};
 
-fn get_all_dicom_files_recursively(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
-    let mut files = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            files.extend(get_all_dicom_files_recursively(&path)?);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("dcm") {
-            files.push(path.to_string_lossy().to_string());
-        }
-    }
-    Ok(files)
-}
-
-fn generate_dicom_thumbnail(path: &str) -> Result<(), Box<dyn Error>> {
-    // Compute the hash from the file path
-    let mut hasher = Sha256::new();
-    hasher.update(path.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-
-    // Extract the original file name
-    let file_name = Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown");
-
-    // Combine hash and file name, replacing the extension with .png
-    let new_file_name = format!("{}_{}", hash, file_name.replace(".dcm", ".png"));
-
-    // Construct the output path
-    let output_path = Path::new("thumbnails").join(new_file_name);
-
-    let obj = open_file(path)?;
+fn generate_dicom_thumbnail(dicom_base64: &str) -> Result<String, Box<dyn Error>> {
+    // Decode base64 to bytes
+    let dicom_bytes = BASE64.decode(dicom_base64)?;
+    
+    // Create a cursor to read the bytes as a file
+    let cursor = Cursor::new(dicom_bytes);
+    
+    // Open DICOM from memory
+    let obj = object::from_reader(cursor)?;
     let image = match obj.decode_pixel_data() {
         Ok(img) => img,
         Err(e) => {
-            println!("Error decoding pixel data for {}: {}", path, e);
-            return Err(Box::new(e)); // Skip this file but continue processing others
+            println!("Error decoding pixel data: {}", e);
+            return Err(Box::new(e));
         }
     };
 
     let options = ConvertOptions::new().with_bit_depth(BitDepthOption::Auto);
 
-    {
-        let dynamic_image = match image.to_dynamic_image_with_options(0, &options) {
-            Ok(img) => img,
-            Err(e) => {
-                println!("Error converting image for {}: {}", path, e);
-                return Err(Box::new(e)); // Skip this file but continue processing others
-            }
-        };
-
-        let thumbnail = dynamic_image.resize(150, 150, image::imageops::FilterType::Lanczos3);
-
-        fs::create_dir_all("thumbnails")?;
-        if let Err(e) = thumbnail.save(&output_path) {
-            println!("Error saving thumbnail for {}: {}", path, e);
-            return Err(Box::new(e)); // Skip this file but continue processing others
+    let img = match image.to_dynamic_image_with_options(0, &options) {
+        Ok(img) => {
+            let width = img.width() as u32;
+            let height = img.height() as u32;
+            let pixels = img.to_rgb8();
+            ImageBuffer::from_raw(width, height, pixels.into_raw())
+                .map(DynamicImage::ImageRgb8)
+                .ok_or("Failed to create image buffer")?
+        },
+        Err(e) => {
+            println!("Error converting image: {}", e);
+            return Err(Box::new(e));
         }
-    } // Ensure `dynamic_image` and `thumbnail` are dropped here
+    };
 
-    Ok(())
+    let thumbnail = img.resize(150, 150, FilterType::Lanczos3);
+
+    // Create a buffer to store the PNG data
+    let mut png_buffer = Vec::new();
+    thumbnail.write_to(&mut Cursor::new(&mut png_buffer), ImageFormat::Png)?;
+
+    // Convert the PNG buffer to base64
+    let thumbnail_base64 = BASE64.encode(png_buffer);
+
+    Ok(thumbnail_base64)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // Change this to the path to your DICOM files
-    const DICOM_DIR: &str = "/mnt/d/FilterDicom";
-    let files = get_all_dicom_files_recursively(Path::new(DICOM_DIR))?;
-    let total_files = files.len();
+    const DICOM_DIR_FILE: &str = "image-000001.dcm";
+    
+    // Read the DICOM file into memory
+    let mut file = fs::File::open(DICOM_DIR_FILE)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
 
-    let success_count = files.par_iter().map(|file| {
-        let start_time = Instant::now();
+    // Convert the file content to base64
+    let dicom_base64 = BASE64.encode(&buffer);
 
-        let result = generate_dicom_thumbnail(file).is_ok();
+    // Process the base64 DICOM data
+    let start_time = Instant::now();
+    match generate_dicom_thumbnail(&dicom_base64) {
+        Ok(thumbnail_base64) => {
+            // Decode the base64 thumbnail back to PNG bytes
+            let png_bytes = BASE64.decode(thumbnail_base64)?;
+            
+            // Save the PNG bytes to a file
+            fs::write("output_thumbnail.png", png_bytes)?;
+            
+            let elapsed_time = start_time.elapsed();
+            println!("Successfully generated thumbnail. Took: {:.2?}", elapsed_time);
+        },
+        Err(e) => {
+            println!("Error generating thumbnail: {}", e);
+        }
+    }
 
-        let elapsed_time = start_time.elapsed();
-        println!("File {}: Took: {:.2?}", file, elapsed_time);
-
-        result
-    }).filter(|&result| result).count();
-
-    println!("Successfully processed {}/{} files", success_count, total_files);
     Ok(())
 }

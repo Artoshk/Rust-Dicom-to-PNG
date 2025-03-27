@@ -1,2 +1,4 @@
 /target
 thumbnails
+*.dcm
+*.png
